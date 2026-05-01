@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Go Channel Simulator</title>
+    <style>
+        body { font-family: 'Pretendard', sans-serif; background-color: #f4f6f8; display: flex; flex-direction: column; align-items: center; padding: 40px; }
+        .header { text-align: center; margin-bottom: 30px; }
+        .controls { display: flex; gap: 20px; margin-bottom: 40px; align-items: center; background: white; padding: 20px; border-radius: 12px; box-shadow: 0 4px 6px rgba(0,0,0,0.05); }
+        .simulator { display: flex; align-items: center; gap: 20px; width: 100%; max-width: 800px; justify-content: space-between; }
+
+        .entity { width: 150px; height: 150px; border-radius: 12px; display: flex; flex-direction: column; justify-content: center; align-items: center; font-weight: bold; color: white; transition: all 0.3s; position: relative; }
+        .sender { background-color: #4CAF50; }
+        .receiver { background-color: #2196F3; }
+        .blocked { background-color: #f44336 !important; animation: shake 0.5s; }
+
+        .channel-container { flex-grow: 1; display: flex; flex-direction: column; align-items: center; }
+        .channel { width: 100%; height: 80px; border: 4px solid #607d8b; border-radius: 8px; display: flex; align-items: center; padding: 0 10px; gap: 10px; background-color: #eceff1; overflow: hidden; }
+
+        .message { width: 40px; height: 40px; background-color: #ffc107; border-radius: 8px; display: flex; justify-content: center; align-items: center; font-weight: bold; box-shadow: 0 2px 4px rgba(0,0,0,0.2); animation: popIn 0.3s ease-out; }
+
+        button { padding: 10px 20px; border: none; border-radius: 6px; background-color: #333; color: white; font-size: 16px; cursor: pointer; transition: background 0.2s; }
+        button:hover { background-color: #555; }
+        button:active { transform: scale(0.98); }
+
+        .status-badge { position: absolute; top: -15px; background: #fff; color: #f44336; padding: 4px 12px; border-radius: 20px; font-size: 12px; border: 2px solid #f44336; display: none; }
+        .blocked .status-badge { display: block; }
+
+        @keyframes popIn { from { transform: scale(0); opacity: 0; } to { transform: scale(1); opacity: 1; } }
+        @keyframes shake { 0%, 100% { transform: translateX(0); } 25% { transform: translateX(-5px); } 75% { transform: translateX(5px); } }
+    </style>
+</head>
+<body>
+
+<div class="header">
+    <h2>Go Channel 시뮬레이터 🚀</h2>
+    <p>버퍼 크기를 조절하며 메시지를 보내고 받아보세요!</p>
+</div>
+
+<div class="controls">
+    <label>
+        <strong>버퍼 크기 (Capacity):</strong>
+        <input type="range" id="bufferSize" min="0" max="5" value="0">
+        <span id="bufferValue">0 (Unbuffered)</span>
+    </label>
+    <button onclick="reset()">초기화</button>
+</div>
+
+<div class="simulator">
+    <div class="entity sender" id="sender">
+        <div class="status-badge">대기 중 (Blocked)</div>
+        <span>Sender</span>
+        <button onclick="sendMsg()" style="margin-top: 15px; background: rgba(255,255,255,0.2);">보내기</button>
+    </div>
+
+    <div class="channel-container">
+        <div style="margin-bottom: 10px; font-weight: bold; color: #607d8b;">Channel Queue (<span id="queueCount">0</span>/<span id="maxCount">0</span>)</div>
+        <div class="channel" id="channel"></div>
+    </div>
+
+    <div class="entity receiver" id="receiver">
+        <div class="status-badge">대기 중 (Blocked)</div>
+        <span>Receiver</span>
+        <button onclick="receiveMsg()" style="margin-top: 15px; background: rgba(255,255,255,0.2);">받기</button>
+    </div>
+</div>
+
+<script>
+    let bufferSize = 0;
+    let queue = [];
+    let msgCounter = 1;
+    let senderBlocked = false;
+    let receiverBlocked = false;
+
+    const bufferSlider = document.getElementById('bufferSize');
+    const bufferValue = document.getElementById('bufferValue');
+    const channelEl = document.getElementById('channel');
+    const senderEl = document.getElementById('sender');
+    const receiverEl = document.getElementById('receiver');
+
+    bufferSlider.addEventListener('input', (e) => {
+        bufferSize = parseInt(e.target.value);
+        bufferValue.innerText = bufferSize === 0 ? "0 (Unbuffered)" : bufferSize;
+        document.getElementById('maxCount').innerText = bufferSize;
+        reset();
+    });
+
+    function updateUI() {
+        // 채널 렌더링
+        channelEl.innerHTML = '';
+        queue.forEach(msg => {
+            const div = document.createElement('div');
+            div.className = 'message';
+            div.innerText = msg;
+            channelEl.appendChild(div);
+        });
+        document.getElementById('queueCount').innerText = queue.length;
+
+        // 상태 렌더링
+        senderBlocked ? senderEl.classList.add('blocked') : senderEl.classList.remove('blocked');
+        receiverBlocked ? receiverEl.classList.add('blocked') : receiverEl.classList.remove('blocked');
+    }
+
+    function sendMsg() {
+        if (bufferSize === 0) {
+            // Unbuffered 로직
+            if (receiverBlocked) {
+                receiverBlocked = false; // 수신자가 기다리고 있었다면 즉시 전달
+            } else {
+                senderBlocked = true; // 수신자가 없으면 송신자 블로킹
+            }
+        } else {
+            // Buffered 로직
+            if (queue.length < bufferSize) {
+                queue.push(msgCounter++);
+                senderBlocked = false;
+                if (receiverBlocked) receiverBlocked = false; // 빈 큐를 기다리던 수신자 깨움
+            } else {
+                senderBlocked = true; // 버퍼가 꽉 차면 송신자 블로킹
+            }
+        }
+        updateUI();
+    }
+
+    function receiveMsg() {
+        if (bufferSize === 0) {
+            // Unbuffered 로직
+            if (senderBlocked) {
+                senderBlocked = false; // 송신자가 기다리고 있었다면 즉시 받음
+            } else {
+                receiverBlocked = true; // 송신자가 없으면 수신자 블로킹
+            }
+        } else {
+            // Buffered 로직
+            if (queue.length > 0) {
+                queue.shift();
+                receiverBlocked = false;
+                if (senderBlocked) senderBlocked = false; // 꽉 찬 큐를 기다리던 송신자 깨움
+            } else {
+                receiverBlocked = true; // 큐가 비어있으면 수신자 블로킹
+            }
+        }
+        updateUI();
+    }
+
+    function reset() {
+        queue = [];
+        msgCounter = 1;
+        senderBlocked = false;
+        receiverBlocked = false;
+        updateUI();
+    }
+
+    // 초기화
+    updateUI();
+</script>
+</body>
+</html>
